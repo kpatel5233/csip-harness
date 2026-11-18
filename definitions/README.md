@@ -3,7 +3,9 @@
 One YAML file per SunSpec CSIP conformance test, named `<SunSpec ID>.yaml`
 (baseline: *SunSpec CSIP Conformance Test Procedures v1.3*). The format is
 specified field-by-field in [`schema.yaml`](schema.yaml), which is also a JSON
-Schema (draft 2020-12) the loader validates against. Format version: **1.0**.
+Schema (draft 2020-12) the loader validates against. Format version: **1.2**
+(history: `docs/adr/0001`, `0002`, `0003`; format approved by Keyur on
+2026-11-18).
 
 The approved YAML is the single source of truth (CLAUDE.md §4): the harness
 executes it, the evaluator judges against it, and the reference client is built
@@ -15,7 +17,7 @@ from it.
 |---|---|
 | `format_version`, `id`, `title`, `status`, `approval` | Format version, stable SunSpec ID, Gate-1 state |
 | `sunspec_ref` | Document, version, section, pages, errata rows — cite, never quote |
-| `applies_to` | `der_client` and/or `aggregator_client` (server testing is out of scope) |
+| `applies_to` | `der_client` and/or `aggregator_client` (server testing is out of scope; v1 supports `der_client` only) |
 | `dut_inputs` | What the user sends in `dut` of `POST /runs` (certificate, LFDI, PIN, managed devices…) |
 | `preconditions` | TLS/server config and the 2030.5 resource tree the harness provisions, with concrete values |
 | `steps` | Ordered procedure; each step has a role, a SunSpec citation, and (for DUT steps) the expected requests and harness answers |
@@ -37,26 +39,51 @@ from it.
 ## Check vocabulary
 
 Every criterion has exactly one `check` (combinators allowed). Checks only read
-recorded exchanges, TLS metadata, DUT inputs, the provisioned resource graph, or
-operator attestations.
+recorded exchanges, TLS metadata, the provisioned resource graph, or operator
+attestations. Validation of user-supplied inputs (check digits, LFDI vs.
+certificate, SFDI vs. LFDI) is **not** a criterion: the Control API performs it
+at `POST /runs` via `dut_inputs[].type` and `derive_check` and rejects bad input
+with HTTP 422.
 
-| `type` | Passes when |
-|---|---|
-| `request_count` | number of matching exchanges is within `[min, max]` (`max: 0` = forbidden) |
-| `request_order` | first occurrences of the selectors appear in the given order |
-| `request_header` | a request header satisfies `op`/`value` |
-| `response_status` | status codes are in `expected` (DUT's own responses when `direction: harness_to_dut`) |
-| `xsd_valid` | request/response body validates against sep.xsd (optionally with a given root) |
-| `body_field` | an XPath (`sep:` prefix) on the body satisfies `op`/`value` |
-| `timing_window` | first matching exchange happens within `[min_s, max_s]` of an anchor |
-| `poll_interval` | gaps between consecutive matching exchanges are within bounds |
-| `traversal` | the DUT GET every href reachable from a root resource |
-| `tls_property` | TLS version / cipher / curve / client LFDI / chain length match |
-| `dut_input` | a static property of the supplied identity material holds (e.g. PIN check digit) |
-| `operator_attestation` | the operator answered an attestation with the expected value |
-| `all_of`, `any_of`, `not`, `for_each` | combinators; `for_each` iterates e.g. aggregator managed devices |
+| `type` | Passes when | In v1 subset |
+|---|---|---|
+| `request_count` | number of matching exchanges is within `[min, max]` (`max: 0` = forbidden) | yes |
+| `request_order` | first occurrences of the selectors appear in the given order | yes |
+| `request_header` | a request header satisfies `op`/`value` | yes |
+| `response_status` | status codes are in `expected` (DUT's own responses when `direction: harness_to_dut`) | no |
+| `xsd_valid` | request/response body validates against sep.xsd (optionally with a given root) | yes |
+| `body_field` | an XPath (`sep:` prefix) on the body satisfies `op`/`value` | yes |
+| `timing_window` | first matching exchange happens within `[min_s, max_s]` of an anchor | no |
+| `poll_interval` | gaps between consecutive matching exchanges are within bounds | no |
+| `traversal` | the DUT GET every href reachable from a root resource | yes |
+| `tls_property` | TLS version / cipher / curve / client LFDI / chain length match | yes |
+| `operator_attestation` | the operator answered an attestation with the expected value | yes |
+| `all_of`, `any_of` | combinators | yes |
+| `not` | inverts a sub-check | no |
+| `for_each` | iterates a list input, e.g. aggregator managed devices | no |
 
 A selector that matches nothing makes the check FAIL unless `allow_empty: true`.
+
+## v1 subset
+
+`schema.yaml` describes the full format, but the v1 loader accepts only the
+features listed under `x-v1-subset` — exactly what BASIC-001 needs. Anything
+else (e.g. `aggregator_client`, `for_each`, list inputs, `harness` steps,
+`preconditions.clock`, `timing_window`, `direction: harness_to_dut`, duration
+arithmetic in expressions) is rejected with an error naming the definition
+file, the feature, and its location. Aggregator clients are out of scope for v1.
+
+## Protocol conventions fixed by the format
+
+- XML namespace is `urn:ieee:std:2030.5:ns` (IEEE 2030.5-2018) only; bodies in
+  any legacy namespace fail XSD validation.
+- The harness answers normally whatever the request's Accept header says.
+  Strict HTTP checks belong to CORE tests; elsewhere (e.g. BASIC tests) the
+  Accept-header criterion uses `severity: recommended`, so a violation is WARN.
+- SFDI is 1–12 decimal digits (36-bit value + check digit), compared as an
+  integer; no fixed length or zero padding.
+- Identity inputs (LFDI, SFDI, PIN, certificate) are required and have no
+  default. PIN 111115 (the SunSpec default) appears only as an `example`.
 
 ## Verdicts
 
@@ -71,25 +98,27 @@ behaviour (e.g. "client validated the PIN", "client applied the default
 control"). These use `evidence: operator_attestation`: an `operator` step posts
 a prompt through the Control API, the operator answers, and the answer is
 recorded like any other evidence. A missing answer makes the criterion
-INCONCLUSIVE (run → TIMEOUT), never PASS. Prefer a traffic-observable proxy
-where one exists and document the choice in `rationale`.
+INCONCLUSIVE (run → TIMEOUT), never PASS; there is no separate lifecycle
+state for it. Prefer a traffic-observable proxy where one exists and document
+the choice in `rationale`.
 
 ## Authoring rules
 
 1. Paraphrase; cite section, step and pass/fail bullet numbers. No verbatim SunSpec/IEEE text.
-2. Every criterion must be checkable from traffic, TLS data, DUT inputs, or an attestation.
+2. Every criterion must be checkable from traffic, TLS data, or an attestation (input validation happens at `POST /runs`).
 3. Every interpretation or erratum gets a `notes` entry; unresolved ones set `open_question: true` and block approval.
 4. IDs (`<ID>.C<n>`, `<ID>.N<n>`, `S<n>`) are never renumbered or reused.
-5. Requirement IDs are namespaced: `2030.5:SEC.004`, `CSIP:P14`, `IEEE2030.5-2018:6.3.3`, `RFC5246:7.4`.
+5. Requirement IDs are namespaced by the matrix they come from and copied exactly as printed in the SunSpec matrices / "Requirements Tested" tables — even when absent from the matrix body (e.g. `2030.5:BASE.074`; add a note). Examples: `2030.5:SEC.004`, `CSIP:P14`, `IEEE2030.5-2018:6.3.3`, `RFC5246:7.4`.
 6. `definitions/requirements_matrix.csv` (columns: `test_id, criterion_id, requirement_id, sunspec_version`) is regenerated from the criteria; `EXAMPLE-*` files are never exported.
 
 ## Example (fictional)
 
 `EXAMPLE-001` is invented to illustrate the format. It is **not** a SunSpec
-test and is never offered for conformance runs.
+test and is never offered for conformance runs. It uses only `x-v1-subset`
+features.
 
 ```yaml
-format_version: "1.0"
+format_version: "1.2"
 id: EXAMPLE-001
 title: "FICTIONAL - client reads DeviceCapability, then Time"
 status: draft
@@ -126,7 +155,6 @@ preconditions:
       curve: secp256r1
       client_auth: required
     authorized_clients: ["${dut.lfdi}"]
-  clock: {offset_s: 0, quality: 7}
   resources:
     - key: dcap
       type: DeviceCapability
@@ -137,7 +165,7 @@ preconditions:
       type: Time
       href: /tm
       fields: {tzOffset: 0, dstOffset: 0, dstStartTime: 0, dstEndTime: 0}
-      description: currentTime and quality are filled from `clock` at response time.
+      description: "currentTime and quality are filled by the harness defaults (UTC, quality 7) at response time."
 
 steps:
   - id: S1
@@ -252,7 +280,7 @@ negative_cases:
       refclient_flag: accept_text_xml
       target: {method: GET}
       params: {header: Accept, value: "text/xml"}
-      description: Every GET carries "Accept: text/xml" instead of application/sep+xml.
+      description: "Every GET carries the header Accept set to text/xml instead of application/sep+xml."
     expected:
       run_verdict: FAIL
       failing_criteria: [EXAMPLE-001.C2]
@@ -272,5 +300,9 @@ notes:
   - id: NOTE-1
     kind: scope
     text: Fictional fixture for format documentation and loader unit tests only.
+    open_question: false
+  - id: NOTE-2
+    kind: interpretation
+    text: "C2 is mandatory only to illustrate a negative case. In real BASIC tests the Accept-header criterion is severity recommended (WARN); strict HTTP checks belong to CORE tests."
     open_question: false
 ```
