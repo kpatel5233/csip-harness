@@ -3,9 +3,9 @@
 One YAML file per SunSpec CSIP conformance test, named `<SunSpec ID>.yaml`
 (baseline: *SunSpec CSIP Conformance Test Procedures v1.3*). The format is
 specified field-by-field in [`schema.yaml`](schema.yaml), which is also a JSON
-Schema (draft 2020-12) the loader validates against. Format version: **1.2**
-(history: `docs/adr/0001`, `0002`, `0003`; format approved by Keyur on
-2026-11-18).
+Schema (draft 2020-12) the loader validates against. Format version: **1.3**
+(history: `docs/adr/0001`–`0005`; format approved by Keyur on 2026-11-18;
+1.3 adds `no_requirement_reason`, ADR 0005).
 
 The approved YAML is the single source of truth (CLAUDE.md §4): the harness
 executes it, the evaluator judges against it, and the reference client is built
@@ -108,8 +108,8 @@ the choice in `rationale`.
 2. Every criterion must be checkable from traffic, TLS data, or an attestation (input validation happens at `POST /runs`).
 3. Every interpretation or erratum gets a `notes` entry; unresolved ones set `open_question: true` and block approval.
 4. IDs (`<ID>.C<n>`, `<ID>.N<n>`, `S<n>`) are never renumbered or reused.
-5. Requirement IDs are namespaced by the matrix they come from and copied exactly as printed in the SunSpec matrices / "Requirements Tested" tables — even when absent from the matrix body (e.g. `2030.5:BASE.074`; add a note). Examples: `2030.5:SEC.004`, `CSIP:P14`, `IEEE2030.5-2018:6.3.3`, `RFC5246:7.4`.
-6. `definitions/requirements_matrix.csv` (columns: `test_id, criterion_id, requirement_id, sunspec_version`) is regenerated from the criteria; `EXAMPLE-*` files are never exported.
+5. Requirement IDs are namespaced by the matrix they come from and copied exactly as printed in the SunSpec matrices / "Requirements Tested" tables — even when absent from the matrix body (e.g. `2030.5:BASE.074`; add a note). Examples: `2030.5:SEC.004`, `CSIP:P14`, `IEEE2030.5-2018:6.3.3`, `RFC5246:7.4`. Cite only IDs SunSpec prints for the test; a criterion that no printed ID covers leaves `requirements` empty and states why in `no_requirement_reason` (rule R9; the two are mutually exclusive). Harness self-checks need neither.
+6. `definitions/requirements_matrix.csv` (columns: `test_id, criterion_id, requirement_id, sunspec_version`) is regenerated from the criteria; `EXAMPLE-*` files are never exported, and criteria without requirement IDs produce no rows.
 
 ## Example (fictional)
 
@@ -118,7 +118,7 @@ test and is never offered for conformance runs. It uses only `x-v1-subset`
 features.
 
 ```yaml
-format_version: "1.2"
+format_version: "1.3"
 id: EXAMPLE-001
 title: "FICTIONAL - client reads DeviceCapability, then Time"
 status: draft

@@ -1,11 +1,15 @@
-# BASIC-001 - DER Identification (DER client only, format 1.2, v1 subset)
+# BASIC-001 - DER Identification (DER client only, format 1.3, v1 subset)
 # Source: SunSpec CSIP Conformance Test Procedures v1.3, section 7, pp. 69-70.
 # Paraphrased; section/step citations only (CLAUDE.md section 9).
 
-format_version: "1.2"
+format_version: "1.3"
 id: BASIC-001
 title: "DER Identification"
-status: draft
+status: approved
+approval:
+  approved_by: "Keyur"
+  approved_on: "2026-11-18"
+  comment: "Gate 1 approved; R9 gap resolved via no_requirement_reason (format 1.3, ADR 0005)"
 
 sunspec_ref:
   document: "SunSpec CSIP Conformance Test Procedures"
@@ -359,6 +363,7 @@ criteria:
     verifies_steps:
       - S2
     requirements: []
+    no_requirement_reason: "Checks that the DUT starts discovery with a successful GET of DeviceCapability; none of the five IDs printed for BASIC-001 (BASE.074, SEC.001, SEC.002, SEC.004, SEC.005) covers this, and the related client-initiated-communication requirement CSIP G17 is covered by other tests."
     evidence: traffic
     severity: mandatory
     check:
@@ -412,6 +417,7 @@ criteria:
     verifies_steps:
       - S7
     requirements: []
+    no_requirement_reason: "Checks that the DUT GETs its FSA list and every DERProgram-level list and subordinate resource; none of the five IDs printed for BASIC-001 covers FSA traversal, and the related requirements 2030.5 BASE.008 and CSIP P25 are covered by other tests (e.g. CORE-010)."
     evidence: traffic
     severity: mandatory
     check:
@@ -464,6 +470,7 @@ criteria:
       - S5
       - S7
     requirements: []
+    no_requirement_reason: "Checks that the DUT discovers resources by following links in order (DeviceCapability, EndDeviceList, then Registration and FSA list); no ID printed for BASIC-001 covers link-based discovery, and the related requirement 2030.5 DNS.040 is covered by other tests."
     evidence: traffic
     severity: mandatory
     check:
@@ -574,6 +581,7 @@ criteria:
       - S5
       - S7
     requirements: []
+    no_requirement_reason: "Checks that DUT requests declare application/sep+xml in the Accept header; no ID printed for BASIC-001 covers this, and the related requirement 2030.5 GEN.056 is judged strictly in CORE tests."
     evidence: traffic
     severity: recommended
     check:
@@ -615,6 +623,7 @@ criteria:
       - S5
       - S7
     requirements: []
+    no_requirement_reason: "Checks that the DUT never follows the Registration or FSA links of another device's EndDevice, which would show a wrong identity match; the printed SEC IDs define SFDI/LFDI but not this client behaviour, and the related requirements CSIP P21 and 2030.5 SEC.028 are covered by other tests."
     evidence: traffic
     severity: mandatory
     check:
@@ -872,9 +881,10 @@ notes:
       but are covered by other tests and therefore NOT cited here -
       2030.5 SEC.028, SEC.032, BASE.008, DNS.040, SEC.009, SEC.020, GEN.056;
       CSIP G3, G17, P14, P21, P25. As a consequence C1, C4, C5, C9 and C11
-      carry no requirement ID (rule R9 deliberately left open for Keyur's
-      decision). The Accept-header criterion C9 is severity recommended per
-      ADR 0003 decision 7.
+      carry no requirement ID; each states why in its
+      `no_requirement_reason` field (rule R9, format 1.3, ADR 0005) and
+      produces no row in the requirements matrix. The Accept-header
+      criterion C9 is severity recommended per ADR 0003 decision 7.
     open_question: false
 
   - id: NOTE-11

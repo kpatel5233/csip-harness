@@ -1,5 +1,5 @@
 # =============================================================================
-# csip-harness - Test Definition Format, version 1.2
+# csip-harness - Test Definition Format, version 1.3
 # =============================================================================
 # This file is BOTH the human specification of the YAML test-definition format
 # AND a machine-usable JSON Schema (draft 2020-12) written in YAML.
@@ -18,14 +18,15 @@
 # contain descriptions.
 #
 # Owner: spec-analyst. Format changes bump `format_version` and get an ADR
-# in docs/adr/ (0001 = format 1.0, 0002 = format 1.1, 0003 = format 1.2).
+# in docs/adr/ (0001 = format 1.0, 0002 = format 1.1, 0003 = format 1.2,
+# 0004 = step counting, 0005 = format 1.3).
 #
 # Copyright note: definitions written in this format must paraphrase SunSpec /
 # IEEE text and cite section + step numbers only (CLAUDE.md section 9).
 # =============================================================================
 
 $schema: "https://json-schema.org/draft/2020-12/schema"
-$id: "urn:csip-harness:definitions:schema:1.2"
+$id: "urn:csip-harness:definitions:schema:1.3"
 title: "csip-harness test definition"
 description: >
   One YAML file = one SunSpec CSIP conformance test (baseline: SunSpec CSIP
@@ -102,10 +103,10 @@ properties:
 
   format_version:
     type: string
-    const: "1.2"
+    const: "1.3"
     description: >
       Version of THIS format the file is written against. Must be exactly
-      "1.2" for this schema. The loader refuses any other value with an error
+      "1.3" for this schema. The loader refuses any other value with an error
       naming the file and the version found.
 
   id:
@@ -290,7 +291,7 @@ x-semantic-rules:
   - "R6  Every step ID referenced (`after`, `verifies_steps`, selector `window`) exists."
   - "R7  Every criterion listed in a negative case's `expected.failing_criteria` exists and is `severity: mandatory`."
   - "R8  Every `operator_attestation` check names an `attestation` declared by exactly one `operator` step."
-  - "R9  Every criterion has at least one requirement ID unless `evidence: harness_self_check`."
+  - "R9  Every criterion has at least one requirement ID unless `evidence: harness_self_check` is set OR a non-empty `no_requirement_reason` is given. Mutual exclusion - a criterion whose `requirements` list is non-empty MUST NOT set `no_requirement_reason`."
   - "R10 `applies_to` of a step/criterion/negative case is a subset of the top-level `applies_to`."
   - "R11 `status: approved` requires `approval`."
   - "R12 Notes with `open_question: true` block `status: approved` unless they carry a `resolution`."
@@ -360,6 +361,7 @@ x-v1-subset:
     namespace: "urn:ieee:std:2030.5:ns only"
     resource_methods: [GET, HEAD]
     not_in_v1: [clock]
+  criterion_fields: [id, title, sunspec_criterion, verifies_steps, requirements, no_requirement_reason, applies_to, evidence, severity, check, failure_message, rationale]
   criterion_evidence: [traffic, tls, operator_attestation, harness_self_check]
   criterion_severity: [mandatory, recommended]
   negative_case_fault_kinds: [omit_request, wrong_order, alter_request_header, wrong_identity]
@@ -1320,7 +1322,16 @@ $defs:
         type: array
         items:
           $ref: "#/$defs/requirement_id"
-        description: "Requirement IDs covered (rule R9)."
+        description: "Requirement IDs covered (rule R9). Empty only for harness self-checks or when `no_requirement_reason` is set."
+      no_requirement_reason:
+        type: string
+        minLength: 1
+        description: >
+          Optional. Why this criterion cannot be traced to a requirement ID
+          printed by SunSpec for this test (e.g. it checks behaviour whose
+          related requirement is covered by another test). Allowed only when
+          `requirements` is empty (rule R9). Such criteria produce no rows in
+          definitions/requirements_matrix.csv.
       applies_to:
         type: array
         items:
