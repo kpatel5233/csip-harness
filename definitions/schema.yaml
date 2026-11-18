@@ -1,0 +1,1126 @@
+# =============================================================================
+# csip-harness — Test Definition Format, version 1.0
+# =============================================================================
+# This file is BOTH the human specification of the YAML test-definition format
+# AND a machine-usable JSON Schema (draft 2020-12) written in YAML.
+#
+#   * Every field carries a `description` (meaning), its `type`, and - where
+#     applicable - `enum` (allowed values). Required fields are listed in each
+#     object's `required` array.
+#   * Rules that JSON Schema cannot express (cross references, ID prefixes,
+#     uniqueness across lists) are listed under `x-semantic-rules` and MUST be
+#     enforced by the definition loader (harness-engineer) before a run starts.
+#   * Unknown `x-*` keywords are annotations; JSON Schema validators ignore them.
+#
+# Owner: spec-analyst. Changes to this file are format changes: bump
+# `format_version` (MINOR for backward-compatible additions, MAJOR otherwise)
+# and record the change in docs/adr/.
+#
+# Copyright note: definitions written in this format must paraphrase SunSpec /
+# IEEE text and cite section + step numbers only (CLAUDE.md §9).
+# =============================================================================
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "urn:csip-harness:definitions:schema:1.0"
+title: csip-harness test definition
+description: >
+  One YAML file = one SunSpec CSIP conformance test (baseline: SunSpec CSIP
+  Conformance Test Procedures v1.3), restricted to what a DER client [C] or
+  aggregator client [A] does when the harness plays the 2030.5 server.
+  The harness provisions `preconditions`, drives `steps`, records all traffic,
+  and after the run evaluates every entry of `criteria` against the recording
+  (and, where unavoidable, against DUT inputs or operator attestations).
+
+  GLOBAL CONVENTIONS
+  ------------------
+  * Time: all durations are integer seconds, fields end in `_s`.
+    TimeType values placed in 2030.5 payloads are Unix epoch seconds (UTC).
+  * XML: namespace prefix `sep` is bound to `urn:ieee:std:2030.5:ns` in every
+    XPath used in this format. Media type is `application/sep+xml`.
+  * Paths: absolute paths on the harness 2030.5 server, without scheme/host,
+    e.g. `/dcap`. Query strings are never part of a path; see selector `query`.
+  * Expressions: strings containing `${...}` are expressions (see
+    $defs/expression). Everything else is a literal.
+  * Comparison semantics are type-aware using the sep.xsd type of the compared
+    element: hexBinary compares case-insensitively, integer types numerically,
+    booleans as xsd:boolean ("true"/"1"), strings exactly.
+  * Vacuous-truth rule: any check whose selector matches zero recorded
+    exchanges FAILS, unless that check sets `allow_empty: true`.
+
+  VERDICTS
+  --------
+  Each criterion yields exactly one of:
+    PASS | FAIL | WARN | NOT_APPLICABLE | INCONCLUSIVE | ERROR
+      WARN           = a criterion with `severity: recommended` failed.
+      NOT_APPLICABLE = criterion `applies_to` excludes the DUT type of this run.
+      INCONCLUSIVE   = evidence missing because a step never completed or an
+                       operator attestation was not given in time.
+      ERROR          = the evaluator could not evaluate (bad definition, crash),
+                       or a `harness_self_check` criterion failed.
+  The run's terminal lifecycle state (CLAUDE.md §2) is derived in this order:
+    1. ABORTED  - the user aborted the run (criteria still reported as far as possible).
+    2. ERROR    - any criterion is ERROR.
+    3. FAIL     - any criterion is FAIL.
+    4. TIMEOUT  - any criterion is INCONCLUSIVE.
+    5. PASS     - otherwise (WARN and NOT_APPLICABLE do not block PASS).
+
+type: object
+additionalProperties: false
+required:
+  - format_version
+  - id
+  - title
+  - status
+  - sunspec_ref
+  - applies_to
+  - purpose
+  - dut_inputs
+  - preconditions
+  - steps
+  - criteria
+  - timeouts
+  - negative_cases
+properties:
+
+  format_version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+$"
+    description: >
+      Version of THIS format the file is written against, "MAJOR.MINOR".
+      The loader refuses files whose MAJOR differs from the loader's.
+      Current value: "1.0".
+
+  id:
+    type: string
+    pattern: "^(EXAMPLE|COMM|CORE|BASIC|UTIL|AGG|ERR|MAINT)-[0-9]{3}[A-Z]?$"
+    description: >
+      SunSpec test ID, copied unchanged from the baseline document (e.g.
+      "BASIC-001", "COMM-004A"). Stable key for diffing v1.3 against v1.4;
+      never renumber. The file name MUST be `<id>.yaml`. The prefix EXAMPLE
+      is reserved for fictional fixtures (README, unit tests) that are never
+      offered for conformance runs.
+
+  title:
+    type: string
+    description: Short paraphrased title of the SunSpec test.
+
+  status:
+    type: string
+    enum: [draft, approved, superseded]
+    description: >
+      Gate-1 state. `draft` = written by spec-analyst, not yet approved;
+      `approved` = human approved at Gate 1, implementation may start;
+      `superseded` = replaced (e.g. by a v1.4 definition). The Control API
+      only offers `approved` definitions unless started in development mode.
+
+  approval:
+    type: object
+    additionalProperties: false
+    description: Gate-1 record. Required when status is `approved`.
+    required: [approved_by, approved_on]
+    properties:
+      approved_by: {type: string, description: Name of the human approver.}
+      approved_on: {type: string, format: date, description: "ISO date, e.g. 2026-11-18."}
+      comment: {type: string, description: Optional free text.}
+
+  sunspec_ref:
+    type: object
+    additionalProperties: false
+    required: [document, version, section, pages]
+    description: Where the procedure comes from. Cite, never quote.
+    properties:
+      document:
+        type: string
+        description: >
+          Source document title, e.g. "SunSpec CSIP Conformance Test Procedures".
+          Use "none" only for EXAMPLE-* fixtures.
+      version:
+        type: string
+        description: Document version, e.g. "1.3". "n/a" only for EXAMPLE-*.
+      section:
+        type: string
+        description: Section number holding the test, e.g. "7". "n/a" only for EXAMPLE-*.
+      pages:
+        type: string
+        description: Page range in that document version, e.g. "69-70".
+      errata:
+        type: array
+        description: >
+          Errata entries in the same document (e.g. Annex A rows) that change
+          this test. Empty if none.
+        items: {type: string}
+      profile_table:
+        type: object
+        additionalProperties: false
+        description: >
+          What the document's profile-conformance table (v1.3 section 4) says
+          about this test, for traceability.
+        properties:
+          der_client: {type: boolean, description: Required for the DER Client profile.}
+          aggregator_client: {type: boolean, description: Required for the DER Aggregator Client profile.}
+
+  applies_to:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items: {$ref: "#/$defs/dut_type"}
+    description: >
+      DUT types this definition supports. Utility-server testing is out of
+      scope, so `server` is not a valid value. A run whose DUT type is not
+      listed is rejected at POST /runs.
+
+  purpose:
+    type: string
+    description: Paraphrase (1-3 sentences) of the SunSpec purpose section.
+
+  dut_inputs:
+    type: array
+    description: >
+      Everything the user must (or may) supply in the `dut` object of
+      POST /runs. The Control API validates the request body against this
+      list. Values are referenced elsewhere as `${dut.<name>}`.
+    items: {$ref: "#/$defs/dut_input"}
+
+  preconditions:
+    $ref: "#/$defs/preconditions"
+
+  steps:
+    type: array
+    minItems: 1
+    description: >
+      Ordered procedure. Steps form a DAG via `after` (default: the previous
+      step in this list). The orchestrator executes `harness` steps, waits for
+      `dut` and `operator` steps to complete, and treats `recorder` steps as
+      requirements on the recorder. Step completion never produces a verdict
+      on its own; only `criteria` do.
+    items: {$ref: "#/$defs/step"}
+
+  criteria:
+    type: array
+    minItems: 1
+    description: >
+      Pass/fail criteria, each evaluated independently after the run (or at
+      TIMEOUT/ABORT) against the recorded traffic, DUT inputs, or operator
+      attestations.
+    items: {$ref: "#/$defs/criterion"}
+
+  timeouts:
+    $ref: "#/$defs/timeouts"
+
+  negative_cases:
+    type: array
+    minItems: 1
+    description: >
+      Deliberately broken client behaviours used for the negative e2e test
+      (CLAUDE.md §8). Each names the criterion it must make FAIL. The
+      reference client implements each fault behind `refclient_flag`.
+    items: {$ref: "#/$defs/negative_case"}
+
+  excluded:
+    type: array
+    description: >
+      SunSpec content intentionally NOT turned into steps/criteria (e.g. pure
+      server-under-test [S] criteria, out-of-scope discovery). Lets the
+      reviewer audit that nothing in-scope was dropped silently.
+    items:
+      type: object
+      additionalProperties: false
+      required: [sunspec_item, reason]
+      properties:
+        sunspec_item:
+          type: string
+          description: 'Citation, e.g. "Pass/Fail bullet 2 (server part)" or "Setup 2".'
+        reason:
+          type: string
+          description: Why it is excluded, e.g. "server-under-test behaviour; harness is the server".
+
+  notes:
+    type: array
+    description: >
+      Errata, interpretations, ambiguities and open questions. Every place
+      where the definition deviates from or interprets the SunSpec text MUST
+      have a note.
+    items: {$ref: "#/$defs/note"}
+
+# -----------------------------------------------------------------------------
+x-semantic-rules:
+  - "R1  File name equals `<id>.yaml`."
+  - "R2  Criterion IDs are `<id>.C<n>`, negative-case IDs `<id>.N<n>`, n starting at 1, unique, never reused after deletion (retired IDs stay retired so v1.3/v1.4 diffs stay meaningful)."
+  - "R3  Step IDs `S<n>` (optional lowercase suffix for inserted steps, e.g. S3a) are unique within the file."
+  - "R4  Every `${dut.X}` reference names an entry of `dut_inputs`."
+  - "R5  Every resource key referenced (selector `resource`, `links`, `items`, `traversal.root`, `${res.K...}`) exists in `preconditions.resources` or is created by a harness step."
+  - "R6  Every step ID referenced (`after`, `verifies_steps`, selector `window`) exists."
+  - "R7  Every criterion listed in a negative case's `expected.failing_criteria` exists and is `severity: mandatory`."
+  - "R8  Every `operator_attestation` check names an `attestation` declared by exactly one `operator` step."
+  - "R9  Every criterion has at least one requirement ID unless `evidence: harness_self_check`."
+  - "R10 `applies_to` of a step/criterion/negative case is a subset of the top-level `applies_to`."
+  - "R11 `status: approved` requires `approval`."
+  - "R12 Notes with `open_question: true` block `status: approved` unless they carry a `resolution`."
+
+# -----------------------------------------------------------------------------
+$defs:
+
+  dut_type:
+    type: string
+    enum: [der_client, aggregator_client]
+    description: >
+      der_client = SunSpec [C] "Device Client" acting for one DER.
+      aggregator_client = SunSpec [A] client acting for several DERs
+      (managed devices). SunSpec procedures write both as [C].
+
+  requirement_id:
+    type: string
+    pattern: "^(2030\\.5|CSIP|IEEE2030\\.5-2018|RFC[0-9]+):.+$"
+    description: >
+      Namespaced requirement reference.
+        2030.5:<ID>          ID from the SunSpec document's IEEE 2030.5 requirements
+                             matrix, e.g. "2030.5:SEC.004" (these IDs are assigned
+                             by SunSpec, not by IEEE).
+        CSIP:<ID>            ID from the SunSpec document's CSIP requirements matrix,
+                             e.g. "CSIP:P14".
+        IEEE2030.5-2018:<§>  direct clause reference when no matrix ID exists,
+                             e.g. "IEEE2030.5-2018:6.3.3".
+        RFC<n>:<§>           e.g. "RFC5246:7.4".
+      The same IDs populate definitions/requirements_matrix.csv.
+
+  identifier:
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+    description: Lower snake_case key used for resources, inputs, labels and attestations.
+
+  expression:
+    type: string
+    description: >
+      A string that is either a literal or contains one or more `${...}`
+      expressions, evaluated by the harness (at provisioning time inside
+      `preconditions`/harness steps, at evaluation time inside criteria).
+      Grammar (deliberately tiny):
+        expr     := term ( ("+" | "-") duration )?
+        term     := ref | func "(" ref ")"
+        ref      := "dut." name ( "." name | "[" int "]" )*
+                  | "res." key "." ( "href" | field-name )
+                  | "item." name                 (inside for_each)
+                  | "run.start" | "run.provisioned_at" | "run.server_base_url"
+                  | "now"
+        func     := "lfdi_of" | "sfdi_of" | "upper" | "lower"
+        duration := int ( "s" | "m" | "h" )
+      lfdi_of(cert) = first 160 bits of SHA-256 over the DER-encoded cert, 40 hex
+      digits. sfdi_of(lfdi) = left-most 36 bits of the LFDI as decimal plus one
+      check digit (digit sum ≡ 0 mod 10). Time refs evaluate to Unix seconds:
+      run.provisioned_at = entry into PROVISIONED; run.start = entry into
+      RUNNING (first TLS connection from an authorized client).
+      Examples: "${dut.lfdi}", "${run.provisioned_at + 2m}", "${sfdi_of(dut.lfdi)}".
+
+  scalar_or_expression:
+    description: A literal scalar or an expression string.
+    anyOf:
+      - {type: string}
+      - {type: integer}
+      - {type: number}
+      - {type: boolean}
+
+  # ---------------------------------------------------------------- dut input
+  dut_input:
+    type: object
+    additionalProperties: false
+    required: [name, type, required, description]
+    properties:
+      name:
+        $ref: "#/$defs/identifier"
+        description: Key in the POST /runs `dut` object and in `${dut.<name>}`.
+      type:
+        type: string
+        enum: [string, integer, boolean, enum, lfdi, sfdi, pin, pem_certificate, pem_certificate_chain, url, list]
+        description: >
+          Value type with built-in validation:
+            lfdi                 40 hex digits (case-insensitive).
+            sfdi                 decimal string, 12 digits including check digit (leading zeros allowed), check digit valid.
+            pin                  6 decimal digits, last digit is check digit (digit sum ≡ 0 mod 10).
+            pem_certificate      one PEM X.509 certificate, public part only. Private keys are rejected.
+            pem_certificate_chain  ordered PEM bundle, leaf first.
+            list                 array of objects described by `fields`.
+      required:
+        type: boolean
+        description: Whether POST /runs must provide it.
+      description:
+        type: string
+        description: What the user supplies and why the test needs it.
+      default:
+        description: Value used when omitted (only for `required: false`). May be an expression.
+      enum_values:
+        type: array
+        items: {type: string}
+        description: Allowed values when `type: enum`.
+      applies_to:
+        type: array
+        items: {$ref: "#/$defs/dut_type"}
+        description: Only requested for these DUT types (default all of top-level `applies_to`).
+      derive_check:
+        type: string
+        enum: [none, lfdi_matches_certificate, sfdi_matches_lfdi]
+        description: >
+          Consistency check the Control API performs at POST /runs, rejecting
+          the run (HTTP 422) on mismatch. E.g. an `lfdi` input with
+          `lfdi_matches_certificate` must equal lfdi_of(the certificate input
+          named in `derive_from`).
+      derive_from:
+        type: string
+        description: Name of the input the derive_check is computed from.
+      fields:
+        type: array
+        description: Item schema for `type: list` (same structure as dut_input, nested once).
+        items: {$ref: "#/$defs/dut_input"}
+      min_items: {type: integer, minimum: 0, description: "For `type: list`."}
+      max_items: {type: integer, minimum: 1, description: "For `type: list`."}
+      example:
+        description: Concrete example value (documentation and API examples).
+
+  # ------------------------------------------------------------ preconditions
+  preconditions:
+    type: object
+    additionalProperties: false
+    required: [server, resources]
+    description: >
+      State the harness establishes during CREATED -> PROVISIONED, before the
+      run enters WAITING_FOR_CLIENT. SunSpec [S] setup items become entries here.
+    properties:
+      server:
+        type: object
+        additionalProperties: false
+        required: [dcap_path, tls]
+        description: 2030.5 test-server configuration for this run.
+        properties:
+          dcap_path:
+            type: string
+            description: Path of DeviceCapability that the user configures on the DUT, e.g. "/dcap".
+          tls:
+            type: object
+            additionalProperties: false
+            required: [version, cipher_suites, curve, client_auth]
+            properties:
+              version: {type: string, enum: ["1.2"], description: TLS protocol version offered.}
+              cipher_suites:
+                type: array
+                items: {type: string}
+                description: Offered suites, e.g. [TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8].
+              curve: {type: string, enum: [secp256r1], description: ECDHE / certificate curve.}
+              client_auth:
+                type: string
+                enum: [required]
+                description: Mutual TLS is always required.
+              server_chain:
+                type: string
+                enum: [serca_mica_device, serca_mca_mica_device, serca_device]
+                description: Shape of the lab-PKI chain the harness presents. Default serca_mica_device.
+          authorized_clients:
+            type: array
+            items: {$ref: "#/$defs/expression"}
+            description: >
+              LFDIs allowed to connect (TLS cert -> LFDI). Default ["${dut.lfdi}"].
+              Connections from other LFDIs are recorded and refused with 403.
+      resources:
+        type: array
+        description: >
+          The 2030.5 resource tree the harness serves. Generic server behaviour
+          (paging with s/l/a, list `all`/`results`, 404 for unknown paths,
+          405 for disallowed methods per the WADL, Content-Type) is implemented
+          once by the harness and is NOT repeated in definitions.
+        items: {$ref: "#/$defs/resource"}
+      clock:
+        type: object
+        additionalProperties: false
+        description: Optional Time resource behaviour.
+        properties:
+          offset_s: {type: integer, description: "Offset added to harness UTC when serving Time.currentTime. Default 0."}
+          quality: {type: integer, minimum: 3, maximum: 7, description: "Time.quality served. Default 7."}
+
+  resource:
+    type: object
+    additionalProperties: false
+    required: [key, type]
+    description: One served resource (or list resource) with concrete example values.
+    properties:
+      key:
+        $ref: "#/$defs/identifier"
+        description: Local name used by references, e.g. edev_dut, fsa_list_dut.
+      type:
+        type: string
+        pattern: "^[A-Z][A-Za-z0-9]*$"
+        description: sep.xsd global element name, e.g. DeviceCapability, EndDeviceList, EndDevice, Registration, FunctionSetAssignmentsList, FunctionSetAssignments, DERProgramList, DERProgram, DefaultDERControl, DERControlList, DERControl, DERCurveList, DERCurve, Time, DERList, DER, ResponseSetList, LogEventList, MirrorUsagePointList.
+      href:
+        $ref: "#/$defs/expression"
+        description: Path the resource is served at, e.g. "/edev/3". Required for addressable resources.
+      fields:
+        type: object
+        description: >
+          sep.xsd element/attribute name -> value. Values are literals,
+          expressions, nested objects (complex types) or arrays. Elements not
+          listed are omitted if optional in sep.xsd; the loader rejects a
+          resource whose rendering fails XSD validation.
+        additionalProperties: true
+      links:
+        type: object
+        description: >
+          Link element name -> resource key, e.g. {RegistrationLink: reg_dut}.
+          The harness renders `href` from the target and, for ListLinks, the
+          `all` attribute from the target list's item count.
+        additionalProperties: {$ref: "#/$defs/identifier"}
+      items:
+        type: array
+        items: {$ref: "#/$defs/identifier"}
+        description: >
+          For list resources: member resource keys. The harness orders members
+          by the sep.xsd list-ordering rules, not by this array.
+      poll_rate_s:
+        type: integer
+        minimum: 1
+        description: Value of the `pollRate` attribute where the type has one.
+      visible_to:
+        type: string
+        enum: [dut, any_authorized]
+        description: Who may GET it. Default any_authorized.
+      methods:
+        type: array
+        items: {type: string, enum: [GET, HEAD, PUT, POST, DELETE]}
+        description: >
+          Methods the harness accepts on this resource (subset of the WADL).
+          Default GET/HEAD only. POST to list resources creates members
+          (e.g. Response, LogEvent).
+      description:
+        type: string
+        description: Why it exists in this test (cite SunSpec setup item).
+
+  # ----------------------------------------------------------------- selector
+  exchange_selector:
+    type: object
+    additionalProperties: false
+    description: >
+      Filter over the recorded exchanges. All given properties must match
+      (logical AND). An exchange = one HTTP request + its response on a TLS
+      connection, with timestamps, headers, bodies and the connection's TLS
+      metadata.
+    properties:
+      direction:
+        type: string
+        enum: [dut_to_harness, harness_to_dut]
+        description: >
+          dut_to_harness (default): DUT is HTTP client.
+          harness_to_dut: harness is HTTP client, e.g. notifications POSTed to
+          the DUT's notificationURI.
+      client:
+        type: string
+        enum: [dut, any, unauthorized]
+        description: TLS client identity for dut_to_harness exchanges. Default dut.
+      method:
+        oneOf:
+          - {type: string, enum: [GET, HEAD, PUT, POST, DELETE]}
+          - {type: array, items: {type: string, enum: [GET, HEAD, PUT, POST, DELETE]}}
+        description: HTTP method(s).
+      resource:
+        $ref: "#/$defs/identifier"
+        description: Resource key; matches the request path equal to that resource's href.
+      resource_type:
+        type: string
+        description: Matches requests to any provisioned resource of this sep.xsd type.
+      path:
+        $ref: "#/$defs/expression"
+        description: Exact request path (no query string).
+      path_regex:
+        type: string
+        description: Python `re.fullmatch` pattern on the request path.
+      query:
+        type: object
+        additionalProperties: {type: string}
+        description: Query parameter name -> regex the value must fully match, e.g. {l: "^255$"}.
+      status:
+        oneOf:
+          - {type: integer}
+          - {type: array, items: {type: integer}}
+        description: Response status code(s).
+      body_root:
+        type: string
+        description: sep.xsd element name of the request body root, e.g. DERControlResponse.
+      window:
+        type: object
+        additionalProperties: false
+        description: Time window restriction. Bounds are inclusive.
+        properties:
+          after_step: {type: string, description: Only exchanges at/after this step started.}
+          before_step_end: {type: string, description: Only exchanges at/before this step completed.}
+          from_s: {type: integer, description: Seconds after run.start (first DUT TLS connection).}
+          to_s: {type: integer, description: Seconds after run.start.}
+      label:
+        $ref: "#/$defs/identifier"
+        description: >
+          Names the FIRST matching exchange so other checks can anchor on it
+          ("label:<name>" in timing anchors and `after_label` below).
+      after_label:
+        type: string
+        description: Only exchanges strictly after the exchange with this label.
+
+  # ------------------------------------------------------------------- checks
+  check:
+    description: >
+      The evaluator's vocabulary. Each check is deterministic and evaluated
+      only on recorded data, DUT inputs, the provisioned resource graph, or
+      attestations. Discriminator: `type`.
+    oneOf:
+      - $ref: "#/$defs/check_request_count"
+      - $ref: "#/$defs/check_request_order"
+      - $ref: "#/$defs/check_request_header"
+      - $ref: "#/$defs/check_response_status"
+      - $ref: "#/$defs/check_xsd_valid"
+      - $ref: "#/$defs/check_body_field"
+      - $ref: "#/$defs/check_timing_window"
+      - $ref: "#/$defs/check_poll_interval"
+      - $ref: "#/$defs/check_traversal"
+      - $ref: "#/$defs/check_tls_property"
+      - $ref: "#/$defs/check_dut_input"
+      - $ref: "#/$defs/check_operator_attestation"
+      - $ref: "#/$defs/check_all_of"
+      - $ref: "#/$defs/check_any_of"
+      - $ref: "#/$defs/check_not"
+      - $ref: "#/$defs/check_for_each"
+
+  check_request_count:
+    type: object
+    additionalProperties: false
+    required: [type, select]
+    description: >
+      Number of exchanges matching `select` lies within [min, max].
+      Use max: 0 to forbid a request (vacuous-truth rule does not apply when max is 0).
+    properties:
+      type: {const: request_count}
+      select: {$ref: "#/$defs/exchange_selector"}
+      min: {type: integer, minimum: 0, description: Default 1.}
+      max: {type: integer, minimum: 0, description: Default unbounded.}
+
+  check_request_order:
+    type: object
+    additionalProperties: false
+    required: [type, sequence]
+    description: >
+      The first exchange matching sequence[i+1] occurs after the first exchange
+      matching sequence[i], for all i. Each element must match at least once.
+    properties:
+      type: {const: request_order}
+      sequence:
+        type: array
+        minItems: 2
+        items: {$ref: "#/$defs/exchange_selector"}
+
+  check_request_header:
+    type: object
+    additionalProperties: false
+    required: [type, select, header, op]
+    description: Request header of every (or any) matched exchange satisfies op/value.
+    properties:
+      type: {const: request_header}
+      select: {$ref: "#/$defs/exchange_selector"}
+      header: {type: string, description: Case-insensitive header name, e.g. Accept.}
+      op: {type: string, enum: [exists, absent, equals, contains, regex]}
+      value: {type: string, description: Operand for equals/contains/regex.}
+      quantifier: {type: string, enum: [all, any], description: Default all.}
+      allow_empty: {type: boolean, description: Default false (vacuous-truth rule).}
+
+  check_response_status:
+    type: object
+    additionalProperties: false
+    required: [type, select, expected]
+    description: >
+      Status code of matched exchanges is in `expected`. With direction
+      harness_to_dut this checks the DUT's own HTTP responses (e.g. to
+      notifications); with dut_to_harness it is normally a harness self-check.
+    properties:
+      type: {const: response_status}
+      select: {$ref: "#/$defs/exchange_selector"}
+      expected:
+        type: array
+        items: {type: integer}
+      quantifier: {type: string, enum: [all, any], description: Default all.}
+      allow_empty: {type: boolean}
+
+  check_xsd_valid:
+    type: object
+    additionalProperties: false
+    required: [type, select, source]
+    description: The body of matched exchanges validates against sep.xsd (and has root `root` if given).
+    properties:
+      type: {const: xsd_valid}
+      select: {$ref: "#/$defs/exchange_selector"}
+      source: {type: string, enum: [request_body, response_body]}
+      root: {type: string, description: Expected sep.xsd root element name.}
+      allow_empty: {type: boolean}
+
+  check_body_field:
+    type: object
+    additionalProperties: false
+    required: [type, select, source, xpath, op]
+    description: >
+      XPath 1.0 (prefix `sep`) evaluated on the XSD-valid body of each matched
+      exchange; result compared with op/value using type-aware comparison.
+      A body that is not XSD-valid makes this check FAIL.
+    properties:
+      type: {const: body_field}
+      select: {$ref: "#/$defs/exchange_selector"}
+      source: {type: string, enum: [request_body, response_body]}
+      xpath: {type: string, description: 'e.g. "/sep:DERControlResponse/sep:status".'}
+      op:
+        type: string
+        enum: [exists, absent, equals, not_equals, in, regex, gte, lte, between, count_equals]
+      value: {$ref: "#/$defs/scalar_or_expression"}
+      values:
+        type: array
+        items: {$ref: "#/$defs/scalar_or_expression"}
+        description: Operands for `in` (any of) and `between` ([low, high], inclusive).
+      quantifier: {type: string, enum: [all, any], description: Default all.}
+      allow_empty: {type: boolean}
+
+  check_timing_window:
+    type: object
+    additionalProperties: false
+    required: [type, select, anchor]
+    description: >
+      The FIRST exchange matching `select` occurs between anchor+min_s and
+      anchor+max_s (tolerance included).
+    properties:
+      type: {const: timing_window}
+      select: {$ref: "#/$defs/exchange_selector"}
+      anchor:
+        type: string
+        description: >
+          "run.start" | "run.provisioned_at" | "step:<id>.started" |
+          "step:<id>.completed" | "label:<name>" | an expression yielding Unix seconds
+          (e.g. "${res.derc_1.interval.start}").
+      min_s: {type: integer, description: Default 0 (may be negative).}
+      max_s: {type: integer, description: Default unbounded.}
+      tolerance_s: {type: integer, minimum: 0, description: Added to both bounds. Default 0.}
+
+  check_poll_interval:
+    type: object
+    additionalProperties: false
+    required: [type, select]
+    description: >
+      Gaps between consecutive exchanges matching `select` all lie within
+      [min_s - tolerance_s, max_s + tolerance_s], and at least `min_samples`
+      gaps were observed.
+    properties:
+      type: {const: poll_interval}
+      select: {$ref: "#/$defs/exchange_selector"}
+      min_s: {type: integer, minimum: 0}
+      max_s: {type: integer, minimum: 0}
+      tolerance_s: {type: integer, minimum: 0}
+      min_samples: {type: integer, minimum: 1, description: Default 2.}
+
+  check_traversal:
+    type: object
+    additionalProperties: false
+    required: [type, root]
+    description: >
+      The DUT issued at least one successful GET (status 2xx) for every href
+      reachable from resource `root` in the provisioned resource graph,
+      following `links` and list `items`, filtered by include/exclude types.
+      Query strings on the GETs are ignored for matching.
+    properties:
+      type: {const: traversal}
+      root: {$ref: "#/$defs/identifier"}
+      include_types: {type: array, items: {type: string}, description: Only require these sep.xsd types. Default all.}
+      exclude_types: {type: array, items: {type: string}}
+      max_depth: {type: integer, minimum: 1, description: Link hops from root. Default unbounded.}
+      window: {$ref: "#/$defs/exchange_selector/properties/window"}
+
+  check_tls_property:
+    type: object
+    additionalProperties: false
+    required: [type, property, op]
+    description: Property of every (or any) recorded TLS connection from `client`.
+    properties:
+      type: {const: tls_property}
+      client: {type: string, enum: [dut, any], description: Default dut.}
+      property:
+        type: string
+        enum: [protocol_version, cipher_suite, curve, client_cert_lfdi, client_chain_length, handshake_completed]
+      op: {type: string, enum: [equals, in, gte, lte]}
+      value: {$ref: "#/$defs/scalar_or_expression"}
+      values: {type: array, items: {$ref: "#/$defs/scalar_or_expression"}}
+      quantifier: {type: string, enum: [all, any], description: Default all.}
+
+  check_dut_input:
+    type: object
+    additionalProperties: false
+    required: [type, assert, input]
+    description: >
+      Static assertion on user-supplied DUT inputs (no traffic). Use only where
+      SunSpec requires a property of the DUT's identity material itself.
+    properties:
+      type: {const: dut_input}
+      assert:
+        type: string
+        enum: [pin_check_digit_valid, sfdi_check_digit_valid, sfdi_matches_lfdi, lfdi_matches_certificate, certificate_is_p256_ecdsa, chain_leads_to_lab_serca]
+      input: {type: string, description: Input name (dotted/indexed path allowed, e.g. "managed_devices[0].pin").}
+      against: {type: string, description: Second input for the *_matches_* asserts.}
+
+  check_operator_attestation:
+    type: object
+    additionalProperties: false
+    required: [type, attestation, expected]
+    description: >
+      PASS if the operator answered the named attestation with `expected`
+      via the Control API; FAIL on a different answer; INCONCLUSIVE if no
+      answer before timeouts.attestation_s.
+    properties:
+      type: {const: operator_attestation}
+      attestation: {$ref: "#/$defs/identifier"}
+      expected: {type: string}
+
+  check_all_of:
+    type: object
+    additionalProperties: false
+    required: [type, checks]
+    description: PASS iff every sub-check passes.
+    properties:
+      type: {const: all_of}
+      checks: {type: array, minItems: 1, items: {$ref: "#/$defs/check"}}
+
+  check_any_of:
+    type: object
+    additionalProperties: false
+    required: [type, checks]
+    description: PASS iff at least one sub-check passes.
+    properties:
+      type: {const: any_of}
+      checks: {type: array, minItems: 1, items: {$ref: "#/$defs/check"}}
+
+  check_not:
+    type: object
+    additionalProperties: false
+    required: [type, check]
+    description: Inverts PASS/FAIL of the sub-check (INCONCLUSIVE/ERROR propagate unchanged).
+    properties:
+      type: {const: not}
+      check: {$ref: "#/$defs/check"}
+
+  check_for_each:
+    type: object
+    additionalProperties: false
+    required: [type, in, check]
+    description: >
+      Evaluates `check` once per element of the list expression `in`
+      (typically "${dut.managed_devices}"), with `${item.<field>}` bound.
+      PASS iff all iterations pass; the report lists each iteration.
+    properties:
+      type: {const: for_each}
+      in: {$ref: "#/$defs/expression"}
+      check: {$ref: "#/$defs/check"}
+
+  # --------------------------------------------------------------------- step
+  step:
+    type: object
+    additionalProperties: false
+    required: [id, role, sunspec_tag, description]
+    properties:
+      id:
+        type: string
+        pattern: "^S[0-9]+[a-z]?$"
+        description: Stable step ID within this file.
+      sunspec_step:
+        type: string
+        description: >
+          Citation of the SunSpec item this step realises, e.g. "Procedure 3",
+          "Setup 3", "Procedure 4 (2nd bullet)". Omit only when `extension: true`.
+      extension:
+        type: boolean
+        description: >
+          true = step added by csip-harness with no SunSpec counterpart (e.g. an
+          explicit settle wait). Must be explained in a note. Default false.
+      role:
+        type: string
+        enum: [harness, dut, recorder, operator]
+        description: >
+          harness  = the test server acts (SunSpec [S]/[TS] mapped onto the harness).
+          dut      = the client under test acts (SunSpec [C]/[A]); the step is an
+                     observation window over recorded traffic.
+          recorder = SunSpec [T] "record the communications"; a requirement on the
+                     recorder, no orchestration effect beyond starting capture.
+          operator = a human must do or observe something and answer via the API.
+      sunspec_tag:
+        type: string
+        enum: ["[C]", "[A]", "[S]", "[TS]", "[T]", "[TC]", "[U]", "[C, S]", "none"]
+        description: Tag as printed in the SunSpec procedure, for traceability.
+      applies_to:
+        type: array
+        items: {$ref: "#/$defs/dut_type"}
+        description: Default all top-level types. Skipped (not failed) for other DUT types.
+      description:
+        type: string
+        description: Paraphrase of what happens in this step.
+      after:
+        type: array
+        items: {type: string}
+        description: >
+          Step IDs that must be complete before this step starts. Default: the
+          preceding step in the list. Empty array = starts when the run enters
+          RUNNING.
+      start_at:
+        $ref: "#/$defs/expression"
+        description: >
+          Optional absolute start (Unix seconds expression), e.g.
+          "${res.derc_1.interval.start}" for a step that observes an event start.
+      action:
+        $ref: "#/$defs/harness_action"
+      expect:
+        type: array
+        description: >
+          (role dut) Requests the DUT is expected to make in this step and what
+          the harness answers. Documentation for the refclient and default
+          completion condition; NOT a verdict (criteria decide).
+        items: {$ref: "#/$defs/expected_exchange"}
+      complete_when:
+        type: string
+        enum: [all_expected_seen, any_expected_seen, timeout_elapsed, attestation_given, action_done]
+        description: >
+          Completion rule. Defaults: dut -> all_expected_seen,
+          harness -> action_done, operator -> attestation_given,
+          recorder -> immediately.
+      prompt:
+        type: object
+        additionalProperties: false
+        required: [text, attestation, choices]
+        description: (role operator) What the operator is asked via the Control API.
+        properties:
+          text: {type: string, description: Question shown to the operator.}
+          attestation: {$ref: "#/$defs/identifier"}
+          choices: {type: array, minItems: 2, items: {type: string}, description: 'e.g. ["yes", "no"].'}
+      records:
+        type: array
+        items:
+          type: string
+          enum: [exchanges, request_bodies, response_bodies, tls_metadata, client_certificate_chain, attestation]
+        description: >
+          What the recorder must capture during this step. Informative: the
+          recorder always captures everything; this lists what criteria rely on.
+      timeout_s:
+        type: integer
+        minimum: 1
+        description: Max step duration. Default timeouts.default_step_s.
+      on_timeout:
+        type: string
+        enum: [continue, end_run]
+        description: >
+          continue (default) = mark step incomplete and go on (dependent
+          criteria become INCONCLUSIVE); end_run = stop and evaluate (TIMEOUT
+          unless a criterion FAILs).
+      optional:
+        type: boolean
+        description: If true, an incomplete step never makes criteria INCONCLUSIVE. Default false.
+
+  harness_action:
+    type: object
+    additionalProperties: false
+    required: [kind]
+    description: (role harness) What the harness does.
+    properties:
+      kind:
+        type: string
+        enum: [provision, update_resource, add_resource, delete_resource, send_notification, inject_fault, clear_fault, wait]
+        description: >
+          provision        = (re)apply preconditions.resources (normally implicit at PROVISIONED).
+          update_resource  = change `fields` of an existing resource (version/changedTime handled by harness).
+          add_resource / delete_resource = mutate the tree (list membership updated).
+          send_notification = POST a Notification to a DUT subscription.
+          inject_fault / clear_fault = make the server deviate deliberately
+                             (e.g. answer a path with 301/302/500) for error-handling tests.
+          wait             = do nothing for `duration_s`.
+      resource: {$ref: "#/$defs/identifier"}
+      fields: {type: object, additionalProperties: true, description: New field values for update_resource.}
+      new_resource: {$ref: "#/$defs/resource"}
+      fault:
+        type: object
+        additionalProperties: false
+        properties:
+          select: {$ref: "#/$defs/exchange_selector"}
+          respond_status: {type: integer}
+          respond_headers: {type: object, additionalProperties: {$ref: "#/$defs/expression"}}
+          once: {type: boolean, description: Apply to the first matching request only. Default false.}
+      duration_s: {type: integer, minimum: 0}
+
+  expected_exchange:
+    type: object
+    additionalProperties: false
+    required: [method]
+    properties:
+      method: {type: string, enum: [GET, HEAD, PUT, POST, DELETE]}
+      resource: {$ref: "#/$defs/identifier"}
+      path_regex: {type: string}
+      query: {type: object, additionalProperties: {type: string}}
+      body_root: {type: string, description: Expected request body root element (PUT/POST).}
+      response:
+        type: object
+        additionalProperties: false
+        properties:
+          status: {type: integer}
+          body: {type: string, description: 'Resource key served, or "none".'}
+          headers: {type: object, additionalProperties: {$ref: "#/$defs/expression"}}
+      repeat:
+        type: string
+        enum: [once, poll]
+        description: once (default) or repeatedly at the resource pollRate.
+
+  # ---------------------------------------------------------------- criterion
+  criterion:
+    type: object
+    additionalProperties: false
+    required: [id, title, sunspec_criterion, verifies_steps, requirements, evidence, severity, check, failure_message]
+    properties:
+      id:
+        type: string
+        pattern: "^[A-Z]+-[0-9]{3}[A-Z]?\\.C[0-9]+$"
+        description: "<test id>.C<n>, e.g. BASIC-001.C3 (rule R2)."
+      title: {type: string, description: One-line paraphrase.}
+      sunspec_criterion:
+        type: string
+        description: >
+          Citation of the SunSpec pass/fail bullet(s) or procedure step this
+          realises, e.g. "Pass/Fail bullet 3"; "derived: Procedure 5" when
+          derived from a procedure step; "extension" for harness additions.
+      verifies_steps:
+        type: array
+        minItems: 1
+        items: {type: string}
+        description: Step IDs whose behaviour this criterion judges.
+      requirements:
+        type: array
+        items: {$ref: "#/$defs/requirement_id"}
+        description: Requirement IDs covered (rule R9).
+      applies_to:
+        type: array
+        items: {$ref: "#/$defs/dut_type"}
+        description: Default all top-level types; otherwise NOT_APPLICABLE.
+      evidence:
+        type: string
+        enum: [traffic, tls, dut_input, operator_attestation, harness_self_check]
+        description: >
+          What the verdict rests on.
+            traffic             recorded HTTP exchanges (preferred).
+            tls                 recorded TLS handshake/connection metadata.
+            dut_input           user-supplied inputs only.
+            operator_attestation human observation (DUT-internal behaviour not visible on the wire).
+            harness_self_check  the harness itself behaved as the definition requires
+                                (e.g. served the provisioned payload); failure => ERROR, never FAIL.
+      severity:
+        type: string
+        enum: [mandatory, recommended]
+        description: mandatory -> FAIL on failure; recommended (SHOULD-level) -> WARN.
+      check: {$ref: "#/$defs/check"}
+      failure_message:
+        $ref: "#/$defs/expression"
+        description: >
+          Report text on FAIL/WARN. May use expressions; the evaluator appends
+          the offending exchange IDs automatically.
+      rationale:
+        type: string
+        description: Why this check is a faithful, measurable form of the SunSpec criterion.
+
+  # ------------------------------------------------------------------ timeouts
+  timeouts:
+    type: object
+    additionalProperties: false
+    required: [wait_for_client_s, run_s]
+    properties:
+      wait_for_client_s:
+        type: integer
+        minimum: 1
+        description: >
+          Max time in WAITING_FOR_CLIENT until the first TLS connection from an
+          authorized client. Expiry -> TIMEOUT with every criterion INCONCLUSIVE.
+      run_s:
+        type: integer
+        minimum: 1
+        description: Max time in RUNNING. Expiry -> stop, evaluate, TIMEOUT unless a criterion FAILs.
+      default_step_s:
+        type: integer
+        minimum: 1
+        description: Step timeout when a step sets none. Default 300.
+      settle_s:
+        type: integer
+        minimum: 0
+        description: >
+          Extra observation after the last step completes (to catch late or
+          forbidden requests and enough poll samples). Default 0.
+      attestation_s:
+        type: integer
+        minimum: 1
+        description: Max wait in EVALUATING for pending operator attestations. Default 600.
+
+  # ------------------------------------------------------------- negative case
+  negative_case:
+    type: object
+    additionalProperties: false
+    required: [id, title, fault, expected]
+    properties:
+      id:
+        type: string
+        pattern: "^[A-Z]+-[0-9]{3}[A-Z]?\\.N[0-9]+$"
+        description: "<test id>.N<n>."
+      title: {type: string}
+      applies_to:
+        type: array
+        items: {$ref: "#/$defs/dut_type"}
+      fault:
+        type: object
+        additionalProperties: false
+        required: [kind, refclient_flag, description]
+        properties:
+          kind:
+            type: string
+            enum: [omit_request, add_request, alter_request_header, alter_body_field, wrong_identity, wrong_order, delay_request, drop_connection, custom]
+            description: Category of client misbehaviour.
+          refclient_flag:
+            type: string
+            pattern: "^[a-z][a-z0-9_]*$"
+            description: Name of the reference-client switch that enables this fault (e.g. --fault=skip_registration_get).
+          target:
+            $ref: "#/$defs/exchange_selector"
+            description: Which client request the fault affects (where meaningful).
+          params:
+            type: object
+            additionalProperties: true
+            description: 'Kind-specific parameters, e.g. {header: Accept, value: "text/xml"}.'
+          description:
+            type: string
+            description: Precise description so the refclient engineer can implement it without reading harness code.
+      expected:
+        type: object
+        additionalProperties: false
+        required: [run_verdict, failing_criteria]
+        properties:
+          run_verdict:
+            type: string
+            enum: [FAIL, TIMEOUT]
+            description: Expected terminal run state.
+          failing_criteria:
+            type: array
+            minItems: 1
+            items: {type: string}
+            description: Criteria that MUST be FAIL (rule R7).
+          passing_criteria:
+            type: array
+            items: {type: string}
+            description: Criteria that MUST still PASS (guards against over-broad failures). Others are unconstrained.
+
+  # --------------------------------------------------------------------- note
+  note:
+    type: object
+    additionalProperties: false
+    required: [id, kind, text, open_question]
+    properties:
+      id: {type: string, pattern: "^NOTE-[0-9]+$"}
+      kind:
+        type: string
+        enum: [errata, interpretation, ambiguity, scope, implementation_hint]
+      sunspec_item:
+        type: string
+        description: Citation the note refers to, e.g. "Procedure 4, 2nd bullet".
+      text: {type: string, description: Paraphrased statement of the issue and the interpretation adopted.}
+      open_question: {type: boolean, description: true = needs a decision from lead/human before approval (rule R12).}
+      resolution: {type: string, description: Decision taken, by whom, when.}
